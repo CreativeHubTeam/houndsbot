@@ -1,0 +1,19 @@
+{
+  "name": "chub-botsreach",
+  "version": "1.0.0",
+  "description": "bot created for houndsall server",
+  "main": "index.js",
+  "type": "module",
+  "author": "junerdzikk",
+  "license": "ISC",
+  "dependencies": {
+    "@discordjs/builders": "^1.6.3",
+    "@discordjs/rest": "^1.7.1",
+    "discord.js": "^13.16.0",
+    "fivem": "^2.1.8",
+    "fivem-js": "^1.5.2",
+    "fs": "^0.0.1-security",
+    "mysql": "^2.18.1",
+    "rest": "^2.0.0"
+  }
+}
