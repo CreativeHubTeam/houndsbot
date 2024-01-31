@@ -1,6 +1,7 @@
 # houndsbot
 
 Server fivem script created to search the players channel history to find the identifiers of the players data
+The script is optimised, tested on a 300 online players server
 
 # Cofnig:
 
