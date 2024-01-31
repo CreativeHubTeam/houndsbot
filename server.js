@@ -12,6 +12,7 @@ let config = {
     "houndsdiscord": "829385448345305128",
     "endDate": "2024-01-01",
     "checkChannels": [
+        "1187831821396885657", // trujcardm
         "829392430297382952", // cocorp
         "829416209161519153", // realmrp
         "991486546156998667", // grandrdm
