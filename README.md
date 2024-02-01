@@ -4,7 +4,7 @@ This script has been created to search the player's channel history in order to 
 
 The script is optimized and has been tested on a server with 300 online players.
 
-# Cofnig:
+# Config:
 
 ```
 {
