@@ -1,18 +1,286 @@
-const {
-    Client,
-    Intents,
-    MessageEmbed
-} = require('discord.js');
+const { Client, Intents, MessageEmbed } = require('discord.js');
+
+class Main {
+    constructor(config) {
+        this.config = config;
+        this.client = new Client({
+            intents: [
+                Intents.FLAGS.GUILDS,
+                Intents.FLAGS.GUILD_MEMBERS,
+                Intents.FLAGS.GUILD_PRESENCES,
+                Intents.FLAGS.GUILD_MESSAGES,
+            ],
+        });
+        this.loadcache = false;
+        this.channelsCache = {};
+        this.setupEventListeners();
+    }
+
+    setupEventListeners() {
+        this.client.once('ready', () => {
+            console.log('The script loaded the discord.js module!');
+            this.updateCache();
+            setInterval(() => this.updateCache(), 15 * 60 * 1000); //15 minutes
+        });
+    }
+    
+    login() {
+        this.client.login(this.config.discordBotToken);
+    }
+
+    /**
+     * @param {string} playerName - The name of the player.
+     * @param {Array} foundMessages - message found by the script
+     */
+    async sendmembed(playerName, foundMessages) {
+        const sendChannel = this.client.channels.cache.get(this.config.sendChannelId);
+        if (!sendChannel) {
+            console.warn(`Channel with ID ${this.config.sendChannelId} does not exist!`);
+            return;
+        }
+
+        const embedConfig = this.config.embedConfig;
+        const embed = new MessageEmbed()
+            .setTitle(embedConfig.title)
+            .setDescription(embedConfig.descriptionTemplate.replace('{playerName}', playerName))
+            .setColor(embedConfig.color)
+            .setThumbnail(embedConfig.thumbnailUrl)
+            .setFooter({ text: embedConfig.footerText });
+
+        if (embedConfig.timestamp) {
+            embed.setTimestamp();
+        }
+
+        foundMessages.forEach(({ content, channelName, channelId, messageId, messageTime, identifiers }) => {
+            const link = `https://discord.com/channels/${this.config.houndsdiscord}/${channelId}/${messageId}`;
+            const identifierStrings = [];
+        
+            for (const k in identifiers) {
+                if (identifiers.hasOwnProperty(k)) {
+                    identifierStrings.push(...identifiers[k]);
+                }
+            }
+        
+            embed.addField(
+                `**Channel**: ${channelName}`,
+                `[More](${link})\n\n**Message ID:** ${messageId}\n\n**Content:** ${content.substring(0, 300)}...\n\n**Detected Identifiers:** ${identifierStrings.join(', ')}\n\n**Message Date:** ${messageTime.toLocaleString()}`
+            );
+        });
+        
+        try {
+            await sendChannel.send({ embeds: [embed] });
+        } catch (error) {
+            console.error(`Error sending message to channel ${sendChannel.id}:`, error);
+        }
+    }
+
+    async updateCache() {
+        this.loadcache = false;
+        const startTime = Date.now();
+        console.log('[2;37m[2;33m[Hounds all Server] [0m[2;37m[0m Updating cache...');
+        for (const channelId of this.config.checkChannels) {
+            console.log(`[2;37m[2;33m[Hounds all Server] [0m[2;37m[0m Fetching messages from channel: ${channelId}`);
+            const channel = await this.client.channels.fetch(channelId).catch(error => {
+                console.error(`Unable to fetch channel with ID ${channelId}:`, error);
+            });
+            if (!channel) {
+                console.warn(`Channel with ID ${channelId} does not exist or the bot does not have access!`);
+                continue;
+            }
+
+            try {
+                let messages = await this.fetchAllMessages(channel);
+                this.channelsCache[channelId] = messages;
+                console.log(`[2;37m[2;33m[Hounds all Server] [0m[2;37m[0m Cached ${messages.length} messages from channel ${channelId}.`);
+            } catch (error) {
+                console.error(`Error fetching messages for cache from channel ${channelId}:`, error);
+            }
+        }
+        const endTime = Date.now();
+        this.loadcache = true;
+        console.log(`[2;37m[2;33m[Hounds all Server] [0m[2;37m[0m Cache updated. Duration: ${(endTime - startTime) / 1000} seconds.`);
+    }
+
+    /**
+     * @param {Array} channel - channel info discord
+     * @returns {Array} - message found.
+     */
+
+    async fetchAllMessages(channel) {
+        let allMessages = [];
+        let lastMessageId;
+        const endDateTimestamp = new Date(this.config.endDate).getTime();
+
+        while (1 > 0) {
+            const options = { limit: 100 };
+            if (lastMessageId) options.before = lastMessageId;
+            const messages = await channel.messages.fetch(options).catch(error => {
+                console.error(`Error fetching messages from channel ${channel.id}:`, error);
+                return null;
+            });
+
+            if (!messages || messages.size === 0) break;
+
+            messages.forEach(message => {
+                if (this.config.endDate && message.createdTimestamp < endDateTimestamp) return;
+                allMessages.push(message);
+            });
+
+            lastMessageId = messages.last()?.id;
+            if (!lastMessageId) break;
+        }
+
+        return allMessages;
+    }
+
+    /**
+     * @param {string} text - The text from which to extract identifiers.
+     * @returns {Array} - An array of extracted identifiers.
+     */
+
+    checktext(text) {
+        const identp = {
+            steam: /steam:1[0-9a-f]+/gi,
+            discord: /discord:\d+/gi,
+            license: /license:[0-9a-f]+/gi,
+            xbl: /xbl:\d+/gi,
+            live: /live:\d+/gi,
+            fivem: /fivem:\d+/gi,
+            playerID: /Player ID:\s*(\d+)/gi,
+            rockstarLicense: /Licencja Rockstar:\s*(license:[0-9a-f]+)/gi,
+            tokens: /\b\d{17,19}\b/g
+        };
+    
+        let i = {};
+        for (const [k, p] of Object.entries(identp)) {
+            const m = text.match(p);
+            if (m) {
+                i[k] = m;
+            }
+        }
+        return i;
+    }
+
+    /**
+     * @param {number} channelId - ID channel.
+     * @returns {Array} foundMessages - message found by the script
+     */
+
+    async findIdentifiers(channelId, identifiers) {
+        let foundMessages = [];
+        const cachedMessages = this.channelsCache[channelId] || [];
+    
+        for (const message of cachedMessages) {
+            const messageIdentifiers = this.checktext(message.content);
+            let found = this.checkidentifiers(messageIdentifiers, identifiers);
+    
+            if (!found && message.embeds.length > 0) {
+                for (const embed of message.embeds) {
+                    const embedText = `${embed.title || ''}\n${embed.description || ''}`;
+                    const embedIdentifiers = this.checktext(embedText);
+                    found = this.checkidentifiers(embedIdentifiers, identifiers);
+                    if (found) {
+                        break;
+                    }
+                }
+            }
+    
+            if (found) {
+                foundMessages.push({
+                    content: message.content,
+                    channelName: message.channel.name,
+                    channelId: message.channel.id,
+                    messageId: message.id,
+                    messageTime: message.createdAt,
+                    identifiers: messageIdentifiers
+                });
+            }
+        }
+    
+        return foundMessages;
+    }
+
+    /**
+     * @param {Array} identifierGroups - Identifiers table.
+     * @returns {boolean} 
+     */   
+    checkidentifiers(identifierGroups, identifiers) {
+        for (const itype in identifierGroups) {
+            if (identifierGroups.hasOwnProperty(itype)) {
+                const identifierArray = identifierGroups[itype];
+                if (Array.isArray(identifierArray)) {
+                    for (const i of identifiers) {
+                        if (identifierArray.includes(i)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @param {Array} identifiers - Identifiers table.
+     * @returns {boolean} 
+     */   
+
+    filtr(identifiers, ipdisabled) {
+        return identifiers.filter(identifier => {
+            const isIP = identifier.startsWith("ip:");
+            return ipdisabled ? !isIP : true;
+        });
+    }
+
+    /**
+     * @param {number} player - ID players.
+     * @returns {Array} - table identifiers
+     */   
+
+    GetPlayerIdentifiers(player) {
+        const identifiers = Array.from(
+            { length: GetNumPlayerIdentifiers(player) },
+            (_, i) => GetPlayerIdentifier(player, i)
+        );
+
+        const tokens = Array.from(
+            { length: GetNumPlayerTokens(player) },
+            (_, i) => GetPlayerToken(player, i)
+        );
+        return this.filtr([...identifiers, ...tokens], config.ipdisable)
+    }
 
 
-let config = {
+    /**
+     * @param {Array} players - ID table players.
+     */   
+
+    async checkPlayers(players) {
+        for (const player of players) {
+            const identifiers = this.GetPlayerIdentifiers(player);
+            const playerName = GetPlayerName(player);
+
+            for (const checkChannelId of this.config.checkChannels) {
+                const found = await this.findIdentifiers(checkChannelId, identifiers);
+                if (found.length > 0) {
+                    console.log(`Cheater Detected: ${playerName}`);
+                    await this.sendmembed(`${playerName} (${player})`, found);
+                }
+            }
+            console.log(`Finished checking channels for player: ${playerName} (${player})`);
+        }
+    }
+}
+
+
+const config = {
     "discordBotToken": "",
     "sendChannelId": "",
     "ipdisable": true,
     "houndsdiscord": "829385448345305128",
     "endDate": "2024-01-01",
     "checkChannels": [
-        "1187831821396885657", // trujcardm
+        "1187831821396885657", // trujca
         "829392430297382952", // cocorp
         "829416209161519153", // realmrp
         "991486546156998667", // grandrdm
@@ -40,8 +308,8 @@ let config = {
         "1109113316707663923", // 3rp
     ],
     "embedConfig": {
-        "title": "Player detected!",
-        "descriptionTemplate": "Player **{playerName}** has been detected as a cheater written out on hounds all!",
+        "title": "Wykryto frajera!",
+        "descriptionTemplate": "Gracz **{playerName}** został wykryty jako cheater wypisane na hounds all!",
         "color": "124304",
         "thumbnailUrl": "https://i.imgur.com/VLnUaOz.png",
         "footerText": "©️ Trujca.gg created by junredzikkk",
@@ -50,201 +318,14 @@ let config = {
 };
 
 
-
-const client = new Client({
-    intents: [
-        Intents.FLAGS.GUILDS,
-        Intents.FLAGS.GUILD_MEMBERS,
-        Intents.FLAGS.GUILD_PRESENCES,
-        Intents.FLAGS.GUILD_MESSAGES,
-    ],
-});
-
-
-client.login(config.discordBotToken);
-
-client.once('ready', () => {
-    console.log('Discord bot is ready!');
-});
+const script = new Main(config);
 
 on('trujca:join', async (playerId) => { //rename esx:playerLoaded for the esx framework or another custom for your 
     const player = playerId;
     const playersToCheck = [player];
-
-    await checkPlayers(playersToCheck);
+    if (script.loadcache) {
+        await script.checkPlayers(playersToCheck);
+    }
 });
 
-
-
-
-async function sendmembed(playerName, foundMessages) {
-    const sendChannel = client.channels.cache.get(config.sendChannelId);
-    if (!sendChannel) {
-        console.warn(`The channel for sending with ID ${sendChannel} does not exist!`);
-        return;
-    }
-    const embed = new MessageEmbed()
-        .setTitle(config.embedConfig.title)
-        .setDescription(config.embedConfig.descriptionTemplate.replace('{playerName}', playerName))
-        .setColor(config.embedConfig.color)
-
-    foundMessages.forEach(({
-        content,
-        channelName,
-        channelId,
-        messageId,
-        messageTime,
-        identifiers
-    }) => {
-        const link = `https://discord.com/channels/${config.houndsdiscord}/${channelId}/${messageId}`;
-        embed.addField(
-            `**Kanał**: ${channelName}`,
-            `[Więcej](${link})\n\n**ID Wiadomości:** ${messageId}\n\n**Zawartość:** ${content.substring(0, 300)}...\n\n**Wykryte identyfikatory:** ${identifiers.join(', ')}\n\n**Data Wiadomości:** ${messageTime.toLocaleString()}`
-        );
-    });
-
-    embed.setThumbnail(config.embedConfig.thumbnailUrl)
-    embed.setFooter({ text: config.embedConfig.footerText });
-    if (config.embedConfig.timestamp) {
-        embed.setTimestamp();
-    }
-    try {
-        await sendChannel.send({
-            embeds: [embed]
-        });
-    } catch (error) {
-        console.error(`Error sending message to channel ${sendChannel.id}:`, error);
-    }
-}
-
-function checktext(text) {
-    const identifierP = {
-        steam: /steam:\d+/i,
-        discord: /discord:\d+/i,
-        license: /license:[0-9a-f]+/i,
-        xbl: /xbl:\d+/i,
-        live: /live:\d+/i,
-        fivem: /fivem:\d+/i,
-        playerID: /Player ID:\s*(\d+)/i,
-        rockstarLicense: /Licencja Rockstar:\s*(license:[0-9a-f]+)/i,
-        genericID: /\b\d{17,19}\b/
-    };
-
-    let i = [];
-    for (const [k, p] of Object.entries(identifierP)) {
-        const m = text.match(p);
-        if (m) {
-            i.push(m[0]);
-        }
-    }
-    return i;
-}
-
-async function findIdentifiers(channel, identifiers) {
-    let foundMessages = [];
-    let lastMessageId;
-    const endDateTimestamp = new Date(config.endDate).getTime();
-
-    try {
-        while (true) {
-            const options = { limit: 100 };
-            if (lastMessageId) options.before = lastMessageId;
-            const messages = await channel.messages.fetch(options);
-
-            if (messages.size === 0) {
-                break;
-            }
-            for (const message of messages.values()) {
-                if (config.endDate && message.createdTimestamp < endDateTimestamp) return foundMessages;
-                const messageIdentifiers = checktext(message.content);
-                for (const identifier of identifiers) {
-                    if (messageIdentifiers.includes(identifier)) {
-                        foundMessages.push({
-                            content: message.content,
-                            channelName: channel.name,
-                            channelId: channel.id,
-                            messageId: message.id,
-                            messageTime: message.createdAt,
-                            identifiers: messageIdentifiers
-                        });
-                        break;
-                    }
-                }
-
-                if (message.embeds.length > 0) {
-                    for (const embed of message.embeds) {
-                        const embedText = `${embed.title || ''}\n${embed.description || ''}`;
-                        const embedIdentifiers = checktext(embedText);
-                        for (const identifier of identifiers) {
-                            if (embedIdentifiers.includes(identifier)) {
-                                foundMessages.push({
-                                    content: embedText,
-                                    channelName: channel.name,
-                                    channelId: channel.id,
-                                    messageId: message.id,
-                                    messageTime: message.createdAt,
-                                    identifiers: embedIdentifiers
-                                });
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            lastMessageId = messages.last().id;
-        }
-    } catch (error) {
-        console.error(`Error while fetching messages from channel ${channel.id}:`, error);
-    }
-
-    return foundMessages;
-}
-
-
-function filtr(identifiers, ipdisabled) {
-    return identifiers.filter(identifier => {
-        const isIP = identifier.startsWith("ip:");
-
-        return ipdisabled ? !isIP : true;
-    });
-}
-
-function GetPlayerIdentifiers(player) {
-    const identifiers = Array.from(
-        { length: GetNumPlayerIdentifiers(player) },
-        (_, i) => GetPlayerIdentifier(player, i)
-    );
-
-    const tokens = Array.from(
-        { length: GetNumPlayerTokens(player) },
-        (_, i) => GetPlayerToken(player, i)
-    );
-    return filtr([...identifiers, ...tokens], config.ipdisable)
-}
-
-async function checkPlayers(players) {
-    for (const player of players) {
-        const identifiers = GetPlayerIdentifiers(player);
-        const playerName = GetPlayerName(player);
-
-        for (const checkChannelId of config.checkChannels) {
-            const checkChannel = client.channels.cache.get(checkChannelId);
-            if (!checkChannel) {
-                console.warn(`error channel ${checkChannelId}!`);
-                continue;
-            }
-
-            console.log(`Check channel: ${checkChannel.name} (ID: ${checkChannel.id}) for: ${playerName} (${player})`);
-            try {
-                const foundMessages = await findIdentifiers(checkChannel, identifiers);
-                if (foundMessages.length > 0) {
-                    console.log(`Cheater Detected: ${playerName}`);
-                    await sendmembed(`${playerName} (${player})`, foundMessages);
-                }
-            } catch (err) {
-                console.error(`error ${checkChannel.id}:`, err);
-            }
-        }
-        console.log(`A search of player channels has been completed: ${playerName} (${player})`);
-    }
-}
+script.login();
